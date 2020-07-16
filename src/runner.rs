@@ -150,14 +150,6 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		info!("Stopping daemon {:?}...", self);
 		rt.process.as_mut().unwrap().get_mut().kill()?;
 
-		if let Some(t) = rt.stdout_thread.take() {
-			let _ = t.join();
-		}
-		if let Some(t) = rt.stderr_thread.take() {
-			let _ = t.join();
-		}
-
-
 		info!("Daemon {:?} stopped", self);
 		Ok(())
 	}
