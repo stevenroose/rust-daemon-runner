@@ -170,6 +170,7 @@ impl Config {
 #[derive(Default)]
 pub struct State {
 	pub last_update_tip: Option<(u32, bitcoin::BlockHash)>,
+	/// Buffer holding all stderr output.
 	pub stderr: String,
 }
 

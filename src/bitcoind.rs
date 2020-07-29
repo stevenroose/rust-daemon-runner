@@ -115,6 +115,7 @@ impl Config {
 
 #[derive(Default)]
 pub struct State {
+	/// Buffer holding all stderr output.
 	pub stderr: String,
 }
 
