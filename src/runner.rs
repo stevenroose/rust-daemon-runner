@@ -1,11 +1,30 @@
 
 
-use std::{process, fmt, io, thread, time, mem};
+use std::{process, fmt, io, ops, thread, time, mem};
 use std::sync::{Arc, RwLock};
 use std::io::{BufRead, Read};
 
 use error::Error;
-use ::KillOnDropChild;
+
+/// An wrapper for child that is killed when it's dropped.
+struct KillOnDropChild(process::Child);
+
+impl KillOnDropChild {
+	pub fn get(&self) -> &process::Child {
+		&self.0
+	}
+	pub fn get_mut(&mut self) -> &mut process::Child {
+		&mut self.0
+	}
+}
+
+impl ops::Drop for KillOnDropChild {
+	fn drop(&mut self) {
+		// We don't care about the error here because we probably
+		// already safely stopped the process.
+		let _ = self.0.kill();
+	}
+}
 
 pub struct RuntimeData<S> {
 	pub state: S,

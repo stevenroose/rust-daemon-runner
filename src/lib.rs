@@ -23,24 +23,3 @@ pub use error::Error;
 pub use runner::{DaemonRunner, Status};
 
 
-use std::{ops, process};
-
-/// An wrapper for child that is killed when it's dropped.
-pub(crate) struct KillOnDropChild(process::Child);
-
-impl KillOnDropChild {
-	pub fn get(&self) -> &process::Child {
-		&self.0
-	}
-	pub fn get_mut(&mut self) -> &mut process::Child {
-		&mut self.0
-	}
-}
-
-impl ops::Drop for KillOnDropChild {
-	fn drop(&mut self) {
-		// We don't care about the error here because we probably
-		// already safely stopped the process.
-		let _ = self.0.kill();
-	}
-}
