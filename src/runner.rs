@@ -156,6 +156,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 
 	/// Stop the daemon.
 	/// State is preserved so that it can be restarted with [restart].
+	/// If the daemon already stopped, this is a no-op.
 	fn stop(&self) -> Result<(), Error> {
 		match self.status()? {
 			Status::Init => return Err(Error::InvalidState(Status::Init)),
