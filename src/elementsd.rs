@@ -297,6 +297,7 @@ impl RunnerHelper for Daemon {
 			stdout_file: if self.config.version < 18_00_00 && self.config.version > 2_14_00_00 {
 				let mut path = self.config.datadir.clone();
 				path.push("stdout.log");
+				debug!("Writing elementsd stdout to {}", path.display());
 				Some(File::create(&path).expect("failed to create stdout log file"))
 			} else { None },
 		}

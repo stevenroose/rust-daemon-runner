@@ -48,12 +48,16 @@ pub trait RunnerHelper {
 	type State;
 
 	/// Prepare the daemon for running.
+	///
+	/// This is called before the [_init_state] method is called.
 	fn _prepare(&mut self) -> Result<(), Error>;
 
 	/// The command to run.
 	fn _command(&self) -> process::Command;
 
 	/// Create the initial state.
+	///
+	/// This is called after the [_prepare] method is called.
     fn _init_state(&self) -> Self::State;
 
 	/// Notify that the daemon has started.
