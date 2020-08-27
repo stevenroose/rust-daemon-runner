@@ -2,7 +2,7 @@
 use std::{io, process, fmt, fs, mem};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::fmt::Write;
 
 use bitcoin;
@@ -128,7 +128,7 @@ pub struct Daemon {
 	/// [None] before it has been written.
 	config_file: Option<PathBuf>,
 
-	runtime_data: Option<Arc<RwLock<RuntimeData<State>>>>,
+	runtime_data: Option<Arc<Mutex<RuntimeData<State>>>>,
 }
 
 impl Daemon {
@@ -181,7 +181,7 @@ impl Daemon {
 
 	pub fn take_stderr(&self) -> String {
 		self.runtime_data.as_ref().map(|rt|
-			mem::replace(&mut rt.write().unwrap().state.stderr, String::new())
+			mem::replace(&mut rt.lock().unwrap().state.stderr, String::new())
 		).unwrap_or_default()
 	}
 }
@@ -221,11 +221,11 @@ impl RunnerHelper for Daemon {
 		}
 	}
 
-	fn _notif_started(&mut self, runtime_data: Arc<RwLock<RuntimeData<Self::State>>>) {
+	fn _notif_started(&mut self, runtime_data: Arc<Mutex<RuntimeData<Self::State>>>) {
 		self.runtime_data.replace(runtime_data);
 	}
 
-	fn _get_runtime(&self) -> Option<Arc<RwLock<RuntimeData<Self::State>>>> {
+	fn _get_runtime(&self) -> Option<Arc<Mutex<RuntimeData<Self::State>>>> {
 		self.runtime_data.clone()
 	}
 

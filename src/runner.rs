@@ -1,7 +1,7 @@
 
 
 use std::{process, fmt, io, ops, thread, time, mem};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::io::{BufRead, Read};
 
 use error::Error;
@@ -57,10 +57,10 @@ pub trait RunnerHelper {
     fn _init_state(&self) -> Self::State;
 
 	/// Notify that the daemon has started.
-	fn _notif_started(&mut self, runtime_data: Arc<RwLock<RuntimeData<Self::State>>>);
+	fn _notif_started(&mut self, runtime_data: Arc<Mutex<RuntimeData<Self::State>>>);
 
 	/// Get the current runtime data.
-	fn _get_runtime(&self) -> Option<Arc<RwLock<RuntimeData<Self::State>>>>;
+	fn _get_runtime(&self) -> Option<Arc<Mutex<RuntimeData<Self::State>>>>;
 
 	/// Process some lines of stdout output.
 	/// All lines not processed will be discarded.
@@ -71,27 +71,12 @@ pub trait RunnerHelper {
 	fn _process_stderr(state: &mut Self::State, line: &str);
 }
 
-fn start_stdread_thread<F, R>(
-	name: String, stream: F, rt: Arc<RwLock<RuntimeData<R::State>>>,
-) -> thread::JoinHandle<()>
-	where F: Read + Sync + Send + 'static, R: RunnerHelper, R::State: Sync + Send + 'static
-{
-	thread::Builder::new().name(name).spawn(move || {
-		thread::sleep(time::Duration::from_secs(1));
-		let mut buf_read = io::BufReader::new(stream);
-		for line in buf_read.lines() {
-			R::_process_stdout(&mut rt.write().unwrap().state, &line.unwrap());
-		}
-		trace!("Thread {} stopped", thread::current().name().unwrap());
-	}).expect(&format!("failed to start std read thread"))
-}
-
 pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 	where <Self as RunnerHelper>::State: 'static + Send + Sync,
 {
 	/// The actual startup function.
 	/// This intended for internal use only, use [start] and [restart] instead.
-	fn _start_up(&self, rt: Arc<RwLock<RuntimeData<Self::State>>>) -> Result<(), Error> {
+	fn _start_up(&self, rt: Arc<Mutex<RuntimeData<Self::State>>>) -> Result<(), Error> {
 		info!("Starting daemon {:?}...", self);
 
 		let mut cmd = self._command();
@@ -104,16 +89,34 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		let mut stdout = process.0.stdout.take().unwrap();
 		let mut stderr = process.0.stderr.take().unwrap();
 
-		rt.write().unwrap().process = Some(process);
+		let mut rt_lock = rt.lock().unwrap();
+		rt_lock.process = Some(process);
 
+		// Start stdout processing thread.
 		let rt_cloned = rt.clone();
-		rt.write().unwrap().stdout_thread.replace(start_stdread_thread::<_, Self>(
-			format!("stdout thread for {:?}", self), stdout, rt_cloned,
-		));
+		rt_lock.stdout_thread.replace(
+			thread::Builder::new().name(format!("stdout thread for {:?}", self)).spawn(move || {
+				thread::sleep(time::Duration::from_secs(1));
+				let mut buf_read = io::BufReader::new(stdout);
+				for line in buf_read.lines() {
+					Self::_process_stdout(&mut rt_cloned.lock().unwrap().state, &line.unwrap());
+				}
+				trace!("Thread {} stopped", thread::current().name().unwrap());
+			}
+		).expect(&format!("failed to start stdout read thread")));
+
+		// Start stderr processing thread.
 		let rt_cloned = rt.clone();
-		rt.write().unwrap().stderr_thread.replace(start_stdread_thread::<_, Self>(
-			format!("stderr thread for {:?}", self), stderr, rt_cloned,
-		));
+		rt_lock.stderr_thread.replace(
+			thread::Builder::new().name(format!("stderr thread for {:?}", self)).spawn(move || {
+				thread::sleep(time::Duration::from_secs(1));
+				let mut buf_read = io::BufReader::new(stderr);
+				for line in buf_read.lines() {
+					Self::_process_stderr(&mut rt_cloned.lock().unwrap().state, &line.unwrap());
+				}
+				trace!("Thread {} stopped", thread::current().name().unwrap());
+			}
+		).expect(&format!("failed to start stderr read thread")));
 
 		info!("Daemon {:?} started. PID: {}", self, pid);
 		Ok(())
@@ -131,7 +134,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 
 		self._prepare()?;
 
-		let rt = Arc::new(RwLock::new(RuntimeData {
+		let rt = Arc::new(Mutex::new(RuntimeData {
 			process: None,
 			stdout_thread: None,
 			stderr_thread: None,
@@ -165,7 +168,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		}
 
 		let rt_ref = self._get_runtime().unwrap();
-		let mut rt = rt_ref.write().unwrap();
+		let mut rt = rt_ref.lock().unwrap();
 
 		info!("Stopping daemon {:?}...", self);
 		rt.process.as_mut().unwrap().get_mut().kill()?;
@@ -181,7 +184,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 			None => return Ok(Status::Init),
 		};
 
-		let mut lock = rt.write().unwrap();
+		let mut lock = rt.lock().unwrap();
 		match lock.process.as_mut().unwrap().0.try_wait()? {
 			None => Ok(Status::Running),
 			Some(c) => Ok(Status::Stopped(c)),
@@ -190,7 +193,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 
 	/// Get the OS process ID of the daemon.
 	fn pid(&self) -> Option<u32> {
-		self._get_runtime().map(|rt| rt.read().unwrap().process.as_ref().unwrap().get().id())
+		self._get_runtime().map(|rt| rt.lock().unwrap().process.as_ref().unwrap().get().id())
 	}
 
 	//TODO(stevenroose) try make a generic method

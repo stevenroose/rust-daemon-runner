@@ -2,7 +2,7 @@
 use std::{io, process, fmt, fs, mem};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::fmt::Write;
 use std::str::FromStr;
 
@@ -183,7 +183,7 @@ pub struct Daemon {
 	/// [None] before it has been written.
 	config_file: Option<PathBuf>,
 
-	runtime_data: Option<Arc<RwLock<RuntimeData<State>>>>,
+	runtime_data: Option<Arc<Mutex<RuntimeData<State>>>>,
 }
 
 const UPDATE_TIP_REGEX: &str = r".*UpdateTip: new best=([0-9a-f]+) height=([0-9]+) version=.*$";
@@ -225,7 +225,7 @@ impl Daemon {
 
 	pub fn last_update_tip(&self) -> Option<(u32, bitcoin::BlockHash)> {
 		self.runtime_data.as_ref().and_then(|rt|
-			rt.read().unwrap().state.last_update_tip
+			rt.lock().unwrap().state.last_update_tip
 		)
 	}
 
@@ -252,7 +252,7 @@ impl Daemon {
 
 	pub fn take_stderr(&self) -> String {
 		self.runtime_data.as_ref().map(|rt|
-			mem::replace(&mut rt.write().unwrap().state.stderr, String::new())
+			mem::replace(&mut rt.lock().unwrap().state.stderr, String::new())
 		).unwrap_or_default()
 	}
 }
@@ -294,12 +294,12 @@ impl RunnerHelper for Daemon {
 	}
 
 	/// Notify that the daemon has started.
-	fn _notif_started(&mut self, runtime_data: Arc<RwLock<RuntimeData<Self::State>>>) {
+	fn _notif_started(&mut self, runtime_data: Arc<Mutex<RuntimeData<Self::State>>>) {
 		self.runtime_data.replace(runtime_data);
 	}
 
 	/// Get the current runtime data.
-	fn _get_runtime(&self) -> Option<Arc<RwLock<RuntimeData<Self::State>>>> {
+	fn _get_runtime(&self) -> Option<Arc<Mutex<RuntimeData<Self::State>>>> {
 		self.runtime_data.clone()
 	}
 
