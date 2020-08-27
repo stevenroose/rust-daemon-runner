@@ -117,6 +117,9 @@ impl Config {
 pub struct State {
 	/// Buffer holding all stderr output.
 	pub stderr: String,
+
+	/// For older versions, write stdout to this file.
+	pub stdout_file: Option<File>,
 }
 
 pub struct Daemon {
@@ -218,6 +221,12 @@ impl RunnerHelper for Daemon {
     fn _init_state(&self) -> Self::State {
 		State {
 			stderr: String::new(),
+
+			stdout_file: if self.config.version < 18_00_00 {
+				let mut path = self.config.datadir.clone();
+				path.push("stdout.log");
+				Some(File::create(&path).expect("failed to create stdout log file"))
+			} else { None },
 		}
 	}
 
@@ -229,7 +238,13 @@ impl RunnerHelper for Daemon {
 		self.runtime_data.clone()
 	}
 
-	fn _process_stdout(state: &mut Self::State, line: &str) {}
+	fn _process_stdout(state: &mut Self::State, line: &str) {
+		use std::io::Write;
+
+		if let Some(ref mut file) = state.stdout_file {
+			writeln!(file, "{}", line).unwrap();
+		}
+	}
 
 	fn _process_stderr(state: &mut Self::State, line: &str) {
 		writeln!(&mut state.stderr, "{}", line).unwrap();

@@ -172,6 +172,9 @@ pub struct State {
 	pub last_update_tip: Option<(u32, bitcoin::BlockHash)>,
 	/// Buffer holding all stderr output.
 	pub stderr: String,
+
+	/// For older versions, write stdout to this file.
+	pub stdout_file: Option<File>,
 }
 
 pub struct Daemon {
@@ -290,6 +293,12 @@ impl RunnerHelper for Daemon {
 		State {
 			last_update_tip: None,
 			stderr: String::new(),
+
+			stdout_file: if self.config.version < 18_00_00 && self.config.version > 2_14_00_00 {
+				let mut path = self.config.datadir.clone();
+				path.push("stdout.log");
+				Some(File::create(&path).expect("failed to create stdout log file"))
+			} else { None },
 		}
 	}
 
@@ -304,6 +313,12 @@ impl RunnerHelper for Daemon {
 	}
 
 	fn _process_stdout(state: &mut Self::State, line: &str) {
+		use std::io::Write;
+
+		if let Some(ref mut file) = state.stdout_file {
+			writeln!(file, "{}", line).unwrap();
+		}
+
 		if let Some(tip) = parse_update_tip(&line) {
 			trace!("Setting new elementsd tip: {:?}", tip);
 			state.last_update_tip = Some(tip);
