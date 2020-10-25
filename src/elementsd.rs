@@ -57,9 +57,9 @@ pub struct Config {
 	pub fedpegscript: Option<Script>,
 	#[serde(default)]
 	pub pak_pubkeys: Vec<(PublicKey, PublicKey)>,
-	pub con_dyna_deploy_start: Option<u32>,
-	pub con_nminerconfirmationwindow: Option<u32>,
-	pub con_nrulechangeactivationthreshold: Option<u32>,
+	pub con_dyna_deploy_start: Option<u64>,
+	pub con_nminerconfirmationwindow: Option<u64>,
+	pub con_nrulechangeactivationthreshold: Option<u64>,
 	pub mainchain_rpchost: Option<String>,
 	pub mainchain_rpcport: Option<u16>,
 	pub mainchain_rpcuser: Option<String>,
@@ -169,7 +169,7 @@ impl Config {
 
 #[derive(Default)]
 pub struct State {
-	pub last_update_tip: Option<(u32, bitcoin::BlockHash)>,
+	pub last_update_tip: Option<(u64, bitcoin::BlockHash)>,
 	/// Buffer holding all stderr output.
 	pub stderr: String,
 
@@ -190,12 +190,12 @@ pub struct Daemon {
 }
 
 const UPDATE_TIP_REGEX: &str = r".*UpdateTip: new best=([0-9a-f]+) height=([0-9]+) version=.*$";
-pub fn parse_update_tip(msg: &str) -> Option<(u32, bitcoin::BlockHash)> {
+pub fn parse_update_tip(msg: &str) -> Option<(u64, bitcoin::BlockHash)> {
 	UPDATE_TIP_REGEX.rx_n(2, msg).map(|m| {
 		let blockhash = bitcoin::BlockHash::from_hex(
 			m[1].expect("blockhash missing in UpdateTip")
 		).expect("invalid blockhash in UpdateTip");
-		let height = u32::from_str(
+		let height = u64::from_str(
 			m[2].expect("height missing in UpdateTip")
 		).expect("invalid height in UpdateTip");
 		(height, blockhash)
@@ -226,7 +226,7 @@ impl Daemon {
 		self.config.datadir.as_path()
 	}
 
-	pub fn last_update_tip(&self) -> Option<(u32, bitcoin::BlockHash)> {
+	pub fn last_update_tip(&self) -> Option<(u64, bitcoin::BlockHash)> {
 		self.runtime_data.as_ref().and_then(|rt|
 			rt.lock().unwrap().state.last_update_tip
 		)
