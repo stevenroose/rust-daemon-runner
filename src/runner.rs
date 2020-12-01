@@ -87,7 +87,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		cmd.stdout(process::Stdio::piped());
 		cmd.stderr(process::Stdio::piped());
 		debug!("Launching daemon {:?} with command: {:?}", self, cmd);
-		let mut process = KillOnDropChild(cmd.spawn()?);
+		let mut process = KillOnDropChild(cmd.spawn().map_err(|e| Error::RunCommand(e, cmd))?);
 		let pid = process.get().id();
 
 		let mut stdout = process.0.stdout.take().unwrap();

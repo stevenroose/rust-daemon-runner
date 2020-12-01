@@ -1,4 +1,4 @@
-use std::{error, fmt, io};
+use std::{error, fmt, io, process};
 
 use bitcoincore_rpc;
 
@@ -16,6 +16,8 @@ pub enum Error {
 	Custom(&'static str),
 	/// The daemon is not in the appropriate state for this action.
 	InvalidState(::Status),
+	/// Error running a command.
+	RunCommand(io::Error, process::Command),
 }
 
 impl From<io::Error> for Error {
@@ -41,4 +43,15 @@ impl fmt::Display for Error {
 		fmt::Debug::fmt(self, f)
 	}
 }
-impl error::Error for Error {}
+
+impl error::Error for Error {
+	fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+		match *self {
+			Error::Io(ref e) => Some(e),
+			Error::BitcoinRpc(ref e) => Some(e),
+			Error::LiquidRpc(ref e) => Some(e),
+			Error::RunCommand(ref e, ..) => Some(e),
+			Error::Config(_) | Error::Custom(_) | Error::InvalidState(_) => None,
+		}
+	}
+}
