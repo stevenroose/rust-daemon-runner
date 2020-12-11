@@ -99,7 +99,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		// Start stdout processing thread.
 		let rt_cloned = rt.clone();
 		rt_lock.stdout_thread.replace(
-			thread::Builder::new().name(format!("stdout thread for {:?}", self)).spawn(move || {
+			thread::Builder::new().name(format!("{:?}_stdout", self)).spawn(move || {
 				thread::sleep(time::Duration::from_secs(1));
 				let mut buf_read = io::BufReader::new(stdout);
 				for line in buf_read.lines() {
@@ -112,7 +112,7 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		// Start stderr processing thread.
 		let rt_cloned = rt.clone();
 		rt_lock.stderr_thread.replace(
-			thread::Builder::new().name(format!("stderr thread for {:?}", self)).spawn(move || {
+			thread::Builder::new().name(format!("{:?}_stderr", self)).spawn(move || {
 				thread::sleep(time::Duration::from_secs(1));
 				let mut buf_read = io::BufReader::new(stderr);
 				for line in buf_read.lines() {
