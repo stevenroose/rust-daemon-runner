@@ -107,6 +107,11 @@ impl Config {
 				writeln!(w, "pak={}:{}", pair.0, pair.1)?;
 			}
 		}
+		if !self.pak_pubkeys.is_empty() && version > OLD_LIQUID_VERSION {
+			// Because old liquidd doesn't automatically enforce PAK,
+			// we need to add this flag to start enforcing pak.
+			writeln!(w, "acceptnonstdtxn=0")?;
+		}
 		if let Some(v) = self.con_dyna_deploy_start {
 			writeln!(w, "con_dyna_deploy_start={}", v)?;
 		}
