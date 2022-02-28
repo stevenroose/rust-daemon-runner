@@ -1,20 +1,20 @@
-
-use std::{io, process, fmt, fs, mem};
+use std::fmt::Write;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::fmt::Write;
+use std::{fmt, fs, io, mem, process};
 
 use bitcoin;
 use bitcoincore_rpc::{self as rpc, RpcApi};
+use regex::Regex;
 
 use error::Error;
-use utils;
 use runner::{DaemonRunner, RunnerHelper, RuntimeData};
+use utils;
 
 pub const CONFIG_FILENAME: &str = "bitcoin.conf";
 
-pub const DEFAULT_VERSION: u64 = 18_00_00;
+pub const DEFAULT_VERSION: u64 = 21_00_00;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
@@ -25,23 +25,31 @@ pub struct Config {
 
 	pub datadir: PathBuf,
 	pub network: Option<bitcoin::Network>,
+	pub fdefaultconsistencychecks: Option<bool>,
 	pub debug: bool,
 	pub printtoconsole: bool,
 	pub daemon: bool,
 	pub listen: bool,
+	pub listenonion: bool,
+	pub discover: bool,
 	pub port: Option<u16>,
+	pub proxy: Option<String>,
 	pub txindex: bool,
 	pub connect: Vec<String>,
+	pub addnodes: Vec<String>,
 
 	pub rpccookie: Option<String>,
 	pub rpcport: Option<u16>,
 	pub rpcuser: Option<String>,
 	pub rpcpass: Option<String>,
 
+	pub disablewallet: Option<bool>,
+	pub dbcache: Option<u32>,
 	//TODO(stevenroose) enum?
 	pub addresstype: Option<String>,
 	pub blockmintxfee: Option<f64>,
 	pub minrelaytxfee: Option<f64>,
+	pub fallbackfee: Option<f64>,
 }
 impl Config {
 	pub fn write_into<W: io::Write>(&self, mut w: W) -> Result<(), io::Error> {
@@ -51,10 +59,13 @@ impl Config {
 			DEFAULT_VERSION
 		};
 
-		writeln!(w, "datadir={}", self.datadir.as_path().to_str().unwrap_or("<INVALID>"))?;
+		let datadir = self.datadir.as_path().to_str().unwrap_or("");
+		if datadir.len() > 0 {
+			writeln!(w, "datadir={}", datadir)?;
+		}
 
 		match self.network {
-			Some(bitcoin::Network::Bitcoin) | None => {},
+			Some(bitcoin::Network::Bitcoin) | None => {}
 			Some(bitcoin::Network::Testnet) => {
 				writeln!(w, "testnet=1")?;
 				if version > 17_00_00 {
@@ -69,18 +80,34 @@ impl Config {
 			}
 		}
 
+		if let Some(v) = self.fdefaultconsistencychecks {
+			//fdefaultconsistencychecks manages the default for checkblockindex and checkmempool
+			//elements reads fdefaultconsistencychecks in chainparams, but bitcoin doesn't
+			//so we expand the contents
+			writeln!(w, "checkblockindex={}", v as u8)?;
+			writeln!(w, "checkmempool={}", v as u8)?;
+		}
+
 		writeln!(w, "debug={}", self.debug as u8)?;
 		writeln!(w, "printtoconsole={}", self.printtoconsole as u8)?;
 		writeln!(w, "daemon={}", self.daemon as u8)?;
 		writeln!(w, "listen={}", self.listen as u8)?;
+		writeln!(w, "listenonion={}", self.listenonion as u8)?;
+		writeln!(w, "discover={}", self.discover as u8)?;
 
 		if let Some(p) = self.port {
 			writeln!(w, "port={}", p)?;
+		}
+		if let Some(ref v) = self.proxy {
+			writeln!(w, "proxy={}", v)?;
 		}
 		writeln!(w, "txindex={}", self.txindex as u8)?;
 
 		for connect in &self.connect {
 			writeln!(w, "connect={}", connect)?;
+		}
+		for addnode in &self.addnodes {
+			writeln!(w, "addnode={}", addnode)?;
 		}
 
 		// RPC details
@@ -91,6 +118,8 @@ impl Config {
 			writeln!(w, "rpccookiefile={}", cf)?;
 		}
 		if let Some(p) = self.rpcport {
+			writeln!(w, "rpcallowip=127.0.0.1")?;
+			writeln!(w, "rpcbind=127.0.0.1")?;
 			writeln!(w, "rpcport={}", p)?;
 		}
 		if let Some(ref u) = self.rpcuser {
@@ -100,14 +129,25 @@ impl Config {
 			writeln!(w, "rpcpassword={}", p)?;
 		}
 
+		if let Some(p) = self.disablewallet {
+			writeln!(w, "disablewallet={}", p as u8)?;
+		}
+
+		if let Some(p) = self.dbcache {
+			writeln!(w, "dbcache={}", p)?;
+		}
+
 		if let Some(ref v) = self.addresstype {
 			writeln!(w, "addresstype={}", v)?;
 		}
 		if let Some(v) = self.blockmintxfee {
-			writeln!(w, "blockmintxfee={}", v)?;
+			writeln!(w, "blockmintxfee={:.8}", v)?;
 		}
 		if let Some(v) = self.minrelaytxfee {
-			writeln!(w, "minrelaytxfee={}", v)?;
+			writeln!(w, "minrelaytxfee={:.8}", v)?;
+		}
+		if let Some(v) = self.fallbackfee {
+			writeln!(w, "fallbackfee={:.8}", v)?;
 		}
 		Ok(())
 	}
@@ -120,6 +160,9 @@ pub struct State {
 
 	/// For older versions, write stdout to this file.
 	pub stdout_file: Option<File>,
+
+	/// Error messages produced during runtime.
+	error_msgs: Vec<String>,
 }
 
 pub struct Daemon {
@@ -183,9 +226,17 @@ impl Daemon {
 	}
 
 	pub fn take_stderr(&self) -> String {
-		self.runtime_data.as_ref().map(|rt|
-			mem::replace(&mut rt.lock().unwrap().state.stderr, String::new())
-		).unwrap_or_default()
+		self.runtime_data
+			.as_ref()
+			.map(|rt| mem::replace(&mut rt.lock().unwrap().state.stderr, String::new()))
+			.unwrap_or_default()
+	}
+
+	pub fn take_error_msgs(&self) -> Vec<String> {
+		self.runtime_data
+			.as_ref()
+			.map(|rt| mem::replace(&mut rt.lock().unwrap().state.error_msgs, Vec::new()))
+			.unwrap_or_default()
 	}
 }
 
@@ -218,7 +269,7 @@ impl RunnerHelper for Daemon {
 		cmd
 	}
 
-    fn _init_state(&self) -> Self::State {
+	fn _init_state(&self) -> Self::State {
 		State {
 			stderr: String::new(),
 
@@ -227,7 +278,10 @@ impl RunnerHelper for Daemon {
 				path.push("stdout.log");
 				debug!("Writing bitcoind stdout to {}", path.display());
 				Some(File::create(&path).expect("failed to create stdout log file"))
-			} else { None },
+			} else {
+				None
+			},
+			error_msgs: Vec::new(),
 		}
 	}
 
@@ -239,11 +293,20 @@ impl RunnerHelper for Daemon {
 		self.runtime_data.clone()
 	}
 
-	fn _process_stdout(state: &mut Self::State, line: &str) {
+	fn _process_stdout(name: &str, state: &mut Self::State, line: &str) {
 		use std::io::Write;
 
 		if let Some(ref mut file) = state.stdout_file {
 			writeln!(file, "{}", line).unwrap();
+		}
+
+		lazy_static! {
+			/// Regular expression to match for error messages.
+			static ref ERROR_REGEX: Regex = Regex::new(r"(?i)ERROR").unwrap();
+		}
+		if ERROR_REGEX.is_match(line) {
+			debug!("{}: found error: {}", name, line);
+			state.error_msgs.push(line.to_string());
 		}
 	}
 

@@ -1,8 +1,6 @@
-
-
-use std::{process, fmt, io, ops, thread, time, mem};
-use std::sync::{Arc, Mutex};
 use std::io::{BufRead, Read};
+use std::sync::{Arc, Mutex};
+use std::{fmt, io, mem, ops, process, thread, time};
 
 use error::Error;
 
@@ -58,7 +56,7 @@ pub trait RunnerHelper {
 	/// Create the initial state.
 	///
 	/// This is called after the [_prepare] method is called.
-    fn _init_state(&self) -> Self::State;
+	fn _init_state(&self) -> Self::State;
 
 	/// Notify that the daemon has started.
 	fn _notif_started(&mut self, runtime_data: Arc<Mutex<RuntimeData<Self::State>>>);
@@ -68,7 +66,7 @@ pub trait RunnerHelper {
 
 	/// Process some lines of stdout output.
 	/// All lines not processed will be discarded.
-	fn _process_stdout(state: &mut Self::State, line: &str);
+	fn _process_stdout(name: &str, state: &mut Self::State, line: &str);
 
 	/// Process some lines of stderr output.
 	/// All lines not processed will be discarded.
@@ -76,7 +74,8 @@ pub trait RunnerHelper {
 }
 
 pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
-	where <Self as RunnerHelper>::State: 'static + Send + Sync,
+where
+	<Self as RunnerHelper>::State: 'static + Send,
 {
 	/// The actual startup function.
 	/// This intended for internal use only, use [start] and [restart] instead.
@@ -99,28 +98,38 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		// Start stdout processing thread.
 		let rt_cloned = rt.clone();
 		rt_lock.stdout_thread.replace(
-			thread::Builder::new().name(format!("{:?}_stdout", self)).spawn(move || {
-				thread::sleep(time::Duration::from_secs(1));
-				let mut buf_read = io::BufReader::new(stdout);
-				for line in buf_read.lines() {
-					Self::_process_stdout(&mut rt_cloned.lock().unwrap().state, &line.unwrap());
-				}
-				trace!("Thread {} stopped", thread::current().name().unwrap());
-			}
-		).expect(&format!("failed to start stdout read thread")));
+			thread::Builder::new()
+				.name(format!("{:?}_stdout", self))
+				.spawn(move || {
+					thread::sleep(time::Duration::from_secs(1));
+					let mut buf_read = io::BufReader::new(stdout);
+					for line in buf_read.lines() {
+						Self::_process_stdout(
+							thread::current().name().unwrap(),
+							&mut rt_cloned.lock().unwrap().state,
+							&line.unwrap(),
+						);
+					}
+					trace!("Thread {} stopped", thread::current().name().unwrap());
+				})
+				.expect(&format!("failed to start stdout read thread")),
+		);
 
 		// Start stderr processing thread.
 		let rt_cloned = rt.clone();
 		rt_lock.stderr_thread.replace(
-			thread::Builder::new().name(format!("{:?}_stderr", self)).spawn(move || {
-				thread::sleep(time::Duration::from_secs(1));
-				let mut buf_read = io::BufReader::new(stderr);
-				for line in buf_read.lines() {
-					Self::_process_stderr(&mut rt_cloned.lock().unwrap().state, &line.unwrap());
-				}
-				trace!("Thread {} stopped", thread::current().name().unwrap());
-			}
-		).expect(&format!("failed to start stderr read thread")));
+			thread::Builder::new()
+				.name(format!("{:?}_stderr", self))
+				.spawn(move || {
+					thread::sleep(time::Duration::from_secs(1));
+					let mut buf_read = io::BufReader::new(stderr);
+					for line in buf_read.lines() {
+						Self::_process_stderr(&mut rt_cloned.lock().unwrap().state, &line.unwrap());
+					}
+					trace!("Thread {} stopped", thread::current().name().unwrap());
+				})
+				.expect(&format!("failed to start stderr read thread")),
+		);
 
 		info!("Daemon {:?} started. PID: {}", self, pid);
 		Ok(())
@@ -128,12 +137,15 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 
 	/// Start the daemon for the first time.
 	///
-	/// Currenly it's not supported to use this method to start with a fresh state.
-	/// To restart a daemon after having stopped it, use [restart].
+	/// If the daemon was previously stopped, this method simply restarts it.
 	fn start(&mut self) -> Result<(), Error> {
-		let status = self.status()?;
-		if status != Status::Init {
-			return Err(Error::InvalidState(status));
+		match self.status()? {
+			Status::Running => return Ok(()), // already running
+			Status::Stopped(_) => {
+				// Simply restart.
+				return self._start_up(self._get_runtime().unwrap());
+			}
+			Status::Init => {} // fall through
 		}
 
 		self._prepare()?;
@@ -150,24 +162,13 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		Ok(())
 	}
 
-	/// Restart a daemon using the same state.
-	fn restart(&self) -> Result<(), Error> {
-		match self.status()? {
-			Status::Init => return Err(Error::InvalidState(Status::Init)),
-			Status::Running => self.stop()?,
-			Status::Stopped(_) => {},
-		}
-
-		self._start_up(self._get_runtime().unwrap())
-	}
-
 	/// Stop the daemon.
 	/// State is preserved so that it can be restarted with [restart].
 	/// If the daemon already stopped, this is a no-op.
 	fn stop(&self) -> Result<(), Error> {
 		match self.status()? {
 			Status::Init => return Err(Error::InvalidState(Status::Init)),
-			Status::Running => {},
+			Status::Running => {}
 			Status::Stopped(_) => return Ok(()),
 		}
 
@@ -175,7 +176,9 @@ pub trait DaemonRunner: RunnerHelper + fmt::Debug + Sized
 		let mut rt = rt_ref.lock().unwrap();
 
 		info!("Stopping daemon {:?}...", self);
-		rt.process.as_mut().unwrap().get_mut().kill()?;
+		let proc = rt.process.as_mut().unwrap().get_mut();
+		proc.kill()?;
+		proc.wait()?;
 
 		info!("Daemon {:?} stopped", self);
 		Ok(())
